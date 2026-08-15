@@ -16,119 +16,132 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Decode current and reference viewers
+      - name: Decode and compare viewers
         shell: python
         run: |
-          import base64, gzip, json, re, subprocess
+          import ast, base64, gzip, json, re, subprocess
           from pathlib import Path
-          from urllib.parse import urlparse
 
           REFERENCE = '9b3c0a876914e5aa6cf76939f2c3277c33be516d'
-          out = Path('debug')
-          out.mkdir(exist_ok=True)
+          out = Path('debug'); out.mkdir(exist_ok=True)
 
           def decode_chunks(get_chunk, max_chunks=20):
-              pieces = []
-              last_error = None
+              pieces=[]; last=None
               for i in range(max_chunks):
-                  try:
-                      part = get_chunk(i)
-                  except Exception:
-                      break
-                  if not part:
-                      break
+                  try: part=get_chunk(i)
+                  except Exception: break
+                  if not part: break
                   pieces.append(part.strip())
                   try:
-                      raw = base64.b64decode(''.join(pieces))
-                      html = gzip.decompress(raw).decode('utf-8')
-                      if '<html' in html.lower() or '<!doctype' in html.lower():
-                          return html, i + 1
-                  except Exception as e:
-                      last_error = str(e)
-              raise RuntimeError(f'Could not decode payload: {last_error}')
+                      raw=base64.b64decode(''.join(pieces))
+                      html=gzip.decompress(raw).decode('utf-8')
+                      if '<html' in html.lower() or '<!doctype' in html.lower(): return html,i+1
+                  except Exception as e: last=str(e)
+              raise RuntimeError(f'Could not decode payload: {last}')
 
           def current_chunk(i):
-              p = Path(f'c{i}.txt')
-              if not p.exists():
-                  raise FileNotFoundError(p)
+              p=Path(f'c{i}.txt')
+              if not p.exists(): raise FileNotFoundError(p)
               return p.read_text(encoding='utf-8')
+          def reference_chunk(i): return subprocess.check_output(['git','show',f'{REFERENCE}:c{i}.txt'],text=True)
 
-          def reference_chunk(i):
-              return subprocess.check_output(['git', 'show', f'{REFERENCE}:c{i}.txt'], text=True)
+          current,current_parts=decode_chunks(current_chunk)
+          reference,reference_parts=decode_chunks(reference_chunk)
+          (out/'current-decoded.html').write_text(current,encoding='utf-8')
+          (out/'reference-32476.html').write_text(reference,encoding='utf-8')
 
-          current, current_parts = decode_chunks(current_chunk)
-          reference, reference_parts = decode_chunks(reference_chunk)
+          def balanced(text,start,op='[',cl=']'):
+              depth=0; quote=None; esc=False
+              for i in range(start,len(text)):
+                  ch=text[i]
+                  if quote:
+                      if esc: esc=False
+                      elif ch=='\\': esc=True
+                      elif ch==quote: quote=None
+                      continue
+                  if ch in "'\"`": quote=ch; continue
+                  if ch==op: depth+=1
+                  elif ch==cl:
+                      depth-=1
+                      if depth==0: return text[start:i+1],i+1
+              raise ValueError('unclosed expression')
 
-          (out / 'current-decoded.html').write_text(current, encoding='utf-8')
-          (out / 'reference-32476.html').write_text(reference, encoding='utf-8')
+          def extract_array(text,name):
+              # Find assignments even when variables are comma-chained: const S=[...],F=[...],R=[...]
+              matches=list(re.finditer(r'(?<![\w$])'+re.escape(name)+r'\s*=\s*',text))
+              if not matches: raise KeyError(name)
+              last_err=None
+              for m in matches:
+                  pos=m.end()
+                  while pos<len(text) and text[pos].isspace(): pos+=1
+                  try:
+                      if text.startswith('Object.freeze',pos):
+                          pos=text.find('(',pos)+1
+                          while text[pos].isspace(): pos+=1
+                      if text.startswith('JSON.parse',pos):
+                          p=text.find('(',pos)+1
+                          while text[p].isspace(): p+=1
+                          q=text[p]
+                          if q not in "'\"": raise ValueError('JSON.parse argument is not string')
+                          j=p+1; esc=False
+                          while j<len(text):
+                              ch=text[j]
+                              if esc: esc=False
+                              elif ch=='\\': esc=True
+                              elif ch==q: break
+                              j+=1
+                          raw=ast.literal_eval(text[p:j+1])
+                          return json.loads(raw)
+                      if text[pos]=='[':
+                          s,_=balanced(text,pos)
+                          return json.loads(s)
+                  except Exception as e: last_err=e
+              raise ValueError(f'Could not parse {name}: {last_err}')
 
-          def analyse(label, html, parts):
-              urls = re.findall(r'(?:src|data-src)=[\"\'](https?://[^\"\']+)', html, flags=re.I)
-              hosts = {}
-              for u in urls:
-                  host = urlparse(u).netloc
-                  hosts[host] = hosts.get(host, 0) + 1
-              data_images = list(re.finditer(r'data:image/[^;]+;base64,', html, flags=re.I))
-              return {
-                  'label': label,
-                  'decoded_chars': len(html),
-                  'chunks_used': parts,
-                  'img_tags': len(re.findall(r'<img\b', html, flags=re.I)),
-                  'image_hosts': hosts,
-                  'image_url_examples': urls[:40],
-                  'embedded_data_images': len(data_images),
-                  'has_10798': '10,798' in html or '10798' in html,
-                  'has_774': '774' in html,
-                  'has_293': '293' in html,
-                  'has_1497': '1,497' in html or '1497' in html,
-                  'mentions_zacian': html.lower().count('zacian'),
-              }
+          S=extract_array(current,'S'); CF=extract_array(current,'F'); R=extract_array(current,'R')
+          NAMES=extract_array(reference,'NAMES'); ROWS=extract_array(reference,'ROWS')
+          cur=[]
+          for i,r in enumerate(R):
+              form=(CF[r[2]] if len(r)>2 and r[2] is not None and r[2] < len(CF) else '') or ''
+              name=S[r[0]] + ((' · '+form) if form else '')
+              mask=r[3] if len(r)>3 else 0
+              cur.append({'i':i+1,'name':name,'cp':r[1],'shiny':bool(mask&1),'costume':bool(mask&2),'background':bool(mask&4),'shadow':bool(mask&8)})
+          ref=[]
+          for i,r in enumerate(ROWS):
+              mask=r[2]
+              ref.append({'i':i+1,'name':NAMES[r[0]],'cp':r[1],'shiny':bool(mask&256),'costume':bool(mask&4),'background':bool(mask&1),'mask':mask})
 
-          def snippets_for(html, label, needles):
-              spans=[]
-              for pat in needles:
-                  for m in re.finditer(pat, html, flags=re.I):
-                      a=max(0,m.start()-700); b=min(len(html),m.end()+1500)
-                      spans.append((a,b,pat))
-              spans.sort()
-              merged=[]
-              for a,b,pat in spans:
-                  if merged and a <= merged[-1][1] + 150:
-                      merged[-1]=(merged[-1][0],max(merged[-1][1],b),merged[-1][2]+','+pat)
-                  else:
-                      merged.append((a,b,pat))
-              lines=[f'===== {label} =====']
-              for n,(a,b,pats) in enumerate(merged[:40],1):
-                  lines += [f'--- snippet {n} ({pats}) ---', html[a:b].replace('\r',''), '']
-              return '\n'.join(lines)
+          same_order_name=sum(a['name']==b['name'] for a,b in zip(cur,ref))
+          same_order_cp=sum(a['cp']==b['cp'] for a,b in zip(cur,ref))
+          same_order_both=sum(a['name']==b['name'] and a['cp']==b['cp'] for a,b in zip(cur,ref))
+          flag_diffs=[]; row_diffs=[]
+          for a,b in zip(cur,ref):
+              if a['name']!=b['name'] or a['cp']!=b['cp']:
+                  if len(row_diffs)<60: row_diffs.append({'current':a,'reference':b})
+              if any(a[k]!=b[k] for k in ('shiny','costume','background')):
+                  if len(flag_diffs)<80: flag_diffs.append({'current':a,'reference':b})
 
-          report = {
-              'current': analyse('current', current, current_parts),
-              'reference': analyse('reference-32476', reference, reference_parts),
+          from collections import Counter,defaultdict
+          def key(x): return (x['name'],x['cp'])
+          curkeys=Counter(key(x) for x in cur); refkeys=Counter(key(x) for x in ref)
+          common=sum((curkeys & refkeys).values())
+          report={
+              'current_parts':current_parts,'reference_parts':reference_parts,
+              'current_rows':len(cur),'reference_rows':len(ref),
+              'same_order_name':same_order_name,'same_order_cp':same_order_cp,'same_order_name_cp':same_order_both,
+              'multiset_name_cp_common':common,
+              'current_counts':{k:sum(x[k] for x in cur) for k in ('shiny','costume','background','shadow')},
+              'reference_counts':{k:sum(x[k] for x in ref) for k in ('shiny','costume','background')},
+              'row_diff_examples':row_diffs,'flag_diff_examples':flag_diffs,
           }
-          (out / 'viewer-report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
-
-          image_needles=[r'pokemondb',r'raw\.githubusercontent',r'sprites',r'\.png',r'pic\.src',r'img\.src',r'src=',r'function\s+slug',r'fallback']
-          (out / 'image-source-snippets.txt').write_text(
-              snippets_for(current,'CURRENT',image_needles)+'\n\n'+snippets_for(reference,'REFERENCE 32476',image_needles), encoding='utf-8')
-
-          capture_needles=[r'data:image',r'\.ci',r'ci:',r'ci=',r'function\s+cs',r'\bcs\(',r'background-image',r'backgroundImage',r'\.shot',r'const\s+[A-Z][A-Z0-9_]*\s*=']
-          (out / 'reference-capture-system.txt').write_text(
-              snippets_for(reference,'REFERENCE CAPTURE SYSTEM',capture_needles), encoding='utf-8')
-
-          # Extract top-level const/let declarations near the start/end to make array names visible.
-          decls=[]
-          for m in re.finditer(r'\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=', reference):
-              a=max(0,m.start()-120); b=min(len(reference),m.start()+900)
-              decls.append(reference[a:b])
-          (out / 'reference-declarations.txt').write_text('\n\n---DECL---\n\n'.join(decls[:80]), encoding='utf-8')
-          print(json.dumps(report, indent=2))
+          (out/'dataset-compare.json').write_text(json.dumps(report,indent=2,ensure_ascii=False),encoding='utf-8')
+          print(json.dumps({k:v for k,v in report.items() if not k.endswith('examples')},indent=2,ensure_ascii=False))
 
       - name: Commit inspection output
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add debug/
+          git add debug/current-decoded.html debug/reference-32476.html debug/dataset-compare.json
           git diff --cached --quiet && exit 0
-          git commit -m "Inspect legacy captured image system [skip ci]"
+          git commit -m "Compare corrected and legacy datasets [skip ci]"
           git push
