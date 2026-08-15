@@ -1,4 +1,4 @@
-name: Inspect Pokemon viewers
+name: Build polished Pokemon viewer
 
 on:
   push:
@@ -9,139 +9,99 @@ permissions:
   contents: write
 
 jobs:
-  inspect:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Decode and compare viewers
+      - name: Build single-file viewer from corrected data
         shell: python
         run: |
-          import ast, base64, gzip, json, re, subprocess
+          import base64, gzip, json, re
           from pathlib import Path
 
-          REFERENCE = '9b3c0a876914e5aa6cf76939f2c3277c33be516d'
-          out = Path('debug'); out.mkdir(exist_ok=True)
-
-          def decode_chunks(get_chunk, max_chunks=20):
-              pieces=[]; last=None
-              for i in range(max_chunks):
-                  try: part=get_chunk(i)
-                  except Exception: break
-                  if not part: break
-                  pieces.append(part.strip())
+          def decode_current():
+              pieces=[]
+              for i in range(20):
+                  p=Path(f'c{i}.txt')
+                  if not p.exists(): break
+                  pieces.append(p.read_text(encoding='utf-8').strip())
                   try:
-                      raw=base64.b64decode(''.join(pieces))
-                      html=gzip.decompress(raw).decode('utf-8')
-                      if '<html' in html.lower() or '<!doctype' in html.lower(): return html,i+1
-                  except Exception as e: last=str(e)
-              raise RuntimeError(f'Could not decode payload: {last}')
+                      html=gzip.decompress(base64.b64decode(''.join(pieces))).decode('utf-8')
+                      if '<!doctype' in html.lower() or '<html' in html.lower(): return html
+                  except Exception:
+                      pass
+              raise RuntimeError('Corrected collection payload could not be decoded')
 
-          def current_chunk(i):
-              p=Path(f'c{i}.txt')
-              if not p.exists(): raise FileNotFoundError(p)
-              return p.read_text(encoding='utf-8')
-          def reference_chunk(i): return subprocess.check_output(['git','show',f'{REFERENCE}:c{i}.txt'],text=True)
+          current=decode_current()
+          start=current.index('const S=[')
+          end=current.index(';let D=[]',start)+1
+          data=current[start:end]
+          assert 'R=' in data and 'F=' in data and len(data)>100000
 
-          current,current_parts=decode_chunks(current_chunk)
-          reference,reference_parts=decode_chunks(reference_chunk)
-          (out/'current-decoded.html').write_text(current,encoding='utf-8')
-          (out/'reference-32476.html').write_text(reference,encoding='utf-8')
+          template=r'''<!doctype html>
+          <html lang="en"><head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+          <meta name="theme-color" content="#f2f7f1">
+          <meta name="color-scheme" content="light">
+          <title>Jon's Pokémon GO Trade Collection</title>
+          <style>
+          *{box-sizing:border-box}html,body{height:100%;margin:0}body{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f2f7f1;color:#193b3d;overflow:hidden;-webkit-tap-highlight-color:transparent}.app{height:100%;height:100dvh;display:flex;flex-direction:column}.top{flex:0 0 auto;z-index:10;background:rgba(252,254,250,.96);backdrop-filter:blur(16px);border-bottom:1px solid #dbe8dc;box-shadow:0 3px 18px rgba(39,76,66,.06);padding:max(10px,env(safe-area-inset-top)) 10px 9px}.wrap{width:min(1040px,100%);margin:auto}.brand{display:flex;align-items:center;gap:9px}.ball{width:30px;height:30px;border-radius:50%;background:linear-gradient(#ef5e62 0 46%,#fff 46% 54%,#fff 54%);border:2px solid #274e4d;position:relative;box-shadow:0 2px 8px #315d4f1f;flex:0 0 auto}.ball:after{content:"";position:absolute;left:50%;top:50%;width:8px;height:8px;background:#fff;border:2px solid #274e4d;border-radius:50%;transform:translate(-50%,-50%)}.brandcopy{min-width:0;flex:1}.brand h1{font-size:17px;line-height:1.1;margin:0;font-weight:900;letter-spacing:-.35px;color:#214b4b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.brand p{font-size:10px;margin:3px 0 0;color:#78918b;font-weight:650}.share{border:1px solid #cbded0;background:#fff;color:#356b67;border-radius:999px;padding:7px 10px;font-size:11px;font-weight:850;box-shadow:0 1px 5px #315d4f12}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-top:9px}.stat{border:1px solid #dce9dc;background:#fff;border-radius:11px;padding:6px 2px;text-align:center;min-width:0}.stat b{display:block;font-size:15px;line-height:1;color:#315f5d}.stat span{display:block;margin-top:3px;font-size:8px;line-height:1;text-transform:uppercase;letter-spacing:.45px;color:#88a098;font-weight:850}.tools{display:flex;gap:6px;margin-top:8px}.searchwrap{position:relative;flex:1;min-width:0}.search{width:100%;height:36px;border:1px solid #cfe0d2;background:#eaf4e6;border-radius:999px;padding:0 34px 0 13px;outline:none;color:#244d4d;font-size:13px;font-weight:600}.search:focus{background:#fff;border-color:#80aaa0;box-shadow:0 0 0 3px #7fab9b20}.x{position:absolute;right:5px;top:5px;width:26px;height:26px;border:0;background:transparent;color:#76928c;font-size:18px;border-radius:50%}.speciesselect{max-width:155px;min-width:108px;height:36px;border:1px solid #cfe0d2;background:#fff;border-radius:999px;padding:0 10px;color:#456c68;font-size:11px;font-weight:800}.chips{display:flex;gap:5px;overflow-x:auto;scrollbar-width:none;margin-top:7px;padding-bottom:1px}.chips::-webkit-scrollbar{display:none}.chip{border:1px solid #ccded0;background:#fff;color:#4e716d;border-radius:999px;padding:6px 9px;font-size:10px;font-weight:850;white-space:nowrap}.chip.on{background:#477b76;color:#fff;border-color:#477b76;box-shadow:0 2px 8px #3f746b25}.summary{display:flex;justify-content:space-between;align-items:center;margin-top:6px;padding:0 2px;color:#7a938d;font-size:9px;font-weight:700}.viewport{position:relative;flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;background:linear-gradient(180deg,#f3f8f1,#edf5eb)}.spacer{position:relative;width:100%;max-width:1040px;margin:auto}.rows{position:absolute;left:0;right:0;top:0}.row{position:absolute;left:0;right:0;display:grid;padding:4px 6px;gap:6px}.card{position:relative;min-width:0;height:100%;border:1px solid #d9e7d8;border-radius:13px;background:#fbfff9;overflow:hidden;box-shadow:0 2px 8px rgba(38,73,61,.07);cursor:pointer;transform:translateZ(0)}.card:active{transform:scale(.985)}.artbox{position:absolute;left:0;right:0;top:0;bottom:43px;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 43%,#fff 0,#f9fcf6 48%,#e9f3e5 100%);overflow:hidden}.card.shiny .artbox{background:radial-gradient(circle at 50% 43%,#fffef1 0,#fff9d9 48%,#eee9bf 100%)}.card.costume .artbox{box-shadow:inset 0 0 0 1px #9f84c224}.card.background .artbox:before{content:"";position:absolute;inset:-30%;background:conic-gradient(from 20deg,#ccebe755,#bcd5f255,#dbecc955,#ccebe755);animation:spin 18s linear infinite}.card.shadow .artbox{background:radial-gradient(circle at 50% 43%,#fff 0,#eeeafa 55%,#ddd6ef 100%)}@keyframes spin{to{transform:rotate(360deg)}}.art{position:relative;z-index:1;width:89%;height:89%;object-fit:contain;filter:drop-shadow(0 5px 5px rgba(34,69,57,.13));user-select:none}.fallback{position:relative;z-index:0;width:62px;height:62px;border-radius:50%;background:linear-gradient(#dc7477 0 47%,#fff 47% 53%,#fff 53%);border:4px solid #6f8a84;opacity:.32}.fallback:after{content:"";position:absolute;width:17px;height:17px;border:4px solid #6f8a84;background:white;border-radius:50%;left:50%;top:50%;transform:translate(-50%,-50%)}.order{position:absolute;z-index:3;top:5px;left:5px;background:#fffffff0;border:1px solid #dfe9df;border-radius:999px;padding:2px 5px;font-size:8px;font-weight:900;color:#66817b;box-shadow:0 1px 3px #24483e13}.badges{position:absolute;z-index:3;right:5px;top:5px;display:flex;gap:2px;flex-wrap:wrap;justify-content:flex-end;max-width:70%}.badge{display:grid;place-items:center;min-width:20px;height:20px;padding:0 4px;border:1px solid #ffffff90;border-radius:999px;background:#ffffffec;font-size:10px;box-shadow:0 1px 4px #24483e20}.meta{position:absolute;left:0;right:0;bottom:0;height:43px;padding:5px 7px 6px;background:#fbfff9;border-top:1px solid #e5eee3}.name{font-size:10px;line-height:1.1;font-weight:900;color:#315c5a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.detail{display:flex;align-items:center;justify-content:space-between;gap:4px;margin-top:4px;font-size:8px;color:#79918c;font-weight:750}.form{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}.cp{flex:0 0 auto;background:#edf5e9;border-radius:999px;padding:2px 5px;color:#547772}.empty{padding:52px 18px;text-align:center;color:#7d9790;font-weight:750}.bottom{flex:0 0 auto;display:flex;justify-content:space-between;align-items:center;padding:7px 12px max(7px,env(safe-area-inset-bottom));border-top:1px solid #dae7da;background:#fbfdf9;color:#78928c;font-size:10px;font-weight:700}.topbtn{border:0;background:transparent;color:#3f736e;font-size:10px;font-weight:900}.modal{position:fixed;inset:0;z-index:50;display:none;align-items:center;justify-content:center;padding:18px;background:#092d2ad9;backdrop-filter:blur(7px)}.modal.show{display:flex}.modalbox{width:min(430px,100%);max-height:90dvh;overflow:auto;border-radius:22px;background:#fbfff8;border:1px solid #ffffff90;box-shadow:0 26px 80px #0007;padding:12px}.modalart{position:relative;width:100%;aspect-ratio:1/1;border-radius:16px;overflow:hidden;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle,#fff,#edf5e8)}.modalart img{position:relative;z-index:1;width:92%;height:92%;object-fit:contain;filter:drop-shadow(0 8px 8px #244a3e25)}.modalclose{position:absolute;z-index:3;right:9px;top:9px;width:32px;height:32px;border:1px solid #d7e5d7;border-radius:50%;background:#fffffff0;color:#4e706c;font-size:20px}.modalcopy{padding:11px 4px 3px}.modalcopy h2{margin:0;color:#264f4f;font-size:20px;letter-spacing:-.3px}.modalcopy p{margin:4px 0 0;color:#748e88;font-size:11px;font-weight:700}.taglist{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}.tag{padding:5px 8px;border-radius:999px;background:#eaf3e7;color:#4b706b;font-size:10px;font-weight:850}@media(min-width:650px){.top{padding-left:16px;padding-right:16px}.brand h1{font-size:20px}.brand p{font-size:11px}.stat b{font-size:17px}.stat span{font-size:9px}.row{padding-left:10px;padding-right:10px;gap:8px}.name{font-size:11px}.detail{font-size:9px}}@media(max-width:420px){.speciesselect{max-width:122px}.brand h1{font-size:16px}.share{padding:7px 9px}.stats{gap:4px}.stat b{font-size:14px}.stat span{font-size:7px}.top{padding-left:7px;padding-right:7px}.row{padding-left:4px;padding-right:4px;gap:4px}.card{border-radius:11px}.meta{padding-left:5px;padding-right:5px}}
+          </style></head><body><div class="app">
+          <header class="top"><div class="wrap"><div class="brand"><div class="ball" aria-hidden="true"></div><div class="brandcopy"><h1>Jon's Pokémon GO Trade Collection</h1><p>Pick something you want to trade for</p></div><button class="share" id="share">Share</button></div><div class="stats"><div class="stat"><b id="stAll">—</b><span>Pokémon</span></div><div class="stat"><b id="stShiny">—</b><span>Shiny</span></div><div class="stat"><b id="stBg">—</b><span>Background</span></div><div class="stat"><b id="stCostume">—</b><span>Costume</span></div></div><div class="tools"><div class="searchwrap"><input id="q" class="search" autocomplete="off" inputmode="search" placeholder="Search Pokémon, form or CP…"><button id="clear" class="x" aria-label="Clear search">×</button></div><select id="species" class="speciesselect" aria-label="Filter by species"><option value="">All species</option></select></div><div class="chips" id="chips"><button class="chip on" data-f="all">All</button><button class="chip" data-f="shiny">✨ Shiny</button><button class="chip" data-f="costume">🎩 Costume</button><button class="chip" data-f="background">🌍 Background</button><button class="chip" data-f="shadow">🌑 Shadow</button></div><div class="summary"><span id="result">Loading collection…</span><span id="viewCount"></span></div></div></header>
+          <main class="viewport" id="vp"><div class="spacer" id="sp"><div class="rows" id="rows"></div></div><div class="empty" id="empty" hidden>No Pokémon match those filters.</div></main>
+          <footer class="bottom"><span id="foot">Collection viewer</span><button class="topbtn" id="topBtn">Back to top ↑</button></footer></div>
+          <div class="modal" id="modal"><div class="modalbox"><div class="modalart" id="modalArt"><button class="modalclose" id="modalClose" aria-label="Close">×</button><div class="fallback"></div></div><div class="modalcopy"><h2 id="modalName"></h2><p id="modalInfo"></p><div class="taglist" id="modalTags"></div></div></div></div>
+          <script>
+          __DATA_BLOCK__
+          const FLAG={shiny:1,costume:2,background:4,shadow:8};
+          const ALL=R.map((r,i)=>({order:i+1,species:S[r[0]],cp:r[1],form:(F[r[2]]||''),mask:(r[3]||0)}));
+          let view=ALL,active='all',query='',species='',cols=3,rowH=145,lastW=0;
+          const $=s=>document.querySelector(s),vp=$('#vp'),spacer=$('#sp'),rows=$('#rows'),empty=$('#empty');
+          const has=(d,f)=>f==='all'||!!(d.mask&FLAG[f]);
+          const esc=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
+          function slug(n){const x={'Nidoran♀':'nidoran-f','Nidoran♂':'nidoran-m',"Farfetch'd":'farfetchd',"Sirfetch'd":'sirfetchd','Mr. Mime':'mr-mime','Mime Jr.':'mime-jr','Mr. Rime':'mr-rime','Type: Null':'type-null','Flabébé':'flabebe'};return x[n]||n.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[.'’:]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')}
+          function art(d){return `https://img.pokemondb.net/sprites/home/${has(d,'shiny')?'shiny':'normal'}/${slug(d.species)}.png`}
+          function tags(d){const a=[];if(has(d,'shiny'))a.push(['✨','Shiny']);if(has(d,'costume'))a.push(['🎩','Costume']);if(has(d,'background'))a.push(['🌍','Background']);if(has(d,'shadow'))a.push(['🌑','Shadow']);return a}
+          function matches(d){if(species&&d.species!==species)return false;if(!has(d,active))return false;const q=query.trim().toLowerCase();if(!q)return true;const m=q.match(/^cp\s*(>=|<=|>|<|=)\s*(\d+)$/i);if(m){const n=+m[2];return m[1]==='>'?d.cp>n:m[1]==='<'?d.cp<n:m[1]==='>='?d.cp>=n:m[1]==='<='?d.cp<=n:d.cp===n}const hay=`${d.species} ${d.form} ${d.cp} ${tags(d).map(x=>x[1]).join(' ')}`.toLowerCase();return q.split(/\s+/).filter(Boolean).every(x=>hay.includes(x))}
+          function apply(){view=ALL.filter(matches);$('#result').textContent=active==='all'?'Full collection':document.querySelector(`.chip[data-f="${active}"]`).textContent.trim();$('#viewCount').textContent=`${view.length.toLocaleString()} shown`;empty.hidden=!!view.length;spacer.hidden=!view.length;vp.scrollTop=0;layout(true)}
+          function card(d){const el=document.createElement('article');el.className='card'+(has(d,'shiny')?' shiny':'')+(has(d,'costume')?' costume':'')+(has(d,'background')?' background':'')+(has(d,'shadow')?' shadow':'');const badges=tags(d).map(t=>`<span class="badge" title="${t[1]}">${t[0]}</span>`).join('');el.innerHTML=`<span class="order">#${d.order.toLocaleString()}</span><span class="badges">${badges}</span><div class="artbox"><div class="fallback"></div><img class="art" loading="lazy" decoding="async" src="${art(d)}" alt="${esc(d.species)}"></div><div class="meta"><div class="name">${esc(d.species)}</div><div class="detail"><span class="form">${esc(d.form)||'Pokémon GO'}</span><span class="cp">CP ${d.cp||'?'}</span></div></div>`;const im=el.querySelector('img');im.addEventListener('error',()=>im.remove(),{once:true});el.addEventListener('click',()=>openModal(d));return el}
+          function layout(force=false){const w=Math.min(vp.clientWidth,1040);const newCols=w>=900?5:w>=650?4:3;if(force||Math.abs(w-lastW)>3||newCols!==cols){lastW=w;cols=newCols;const gap=w>=650?8:4,pad=w>=650?20:8,cw=(w-pad-gap*(cols-1))/cols;rowH=Math.max(132,Math.round(cw*1.18)+8);spacer.style.height=`${Math.ceil(view.length/cols)*rowH}px`}render()}
+          let ticking=false;function requestRender(){if(ticking)return;ticking=true;requestAnimationFrame(()=>{ticking=false;render()})}
+          function render(){if(!view.length){rows.innerHTML='';return}const a=Math.max(0,Math.floor(vp.scrollTop/rowH)-4),b=Math.min(Math.ceil(view.length/cols),Math.ceil((vp.scrollTop+vp.clientHeight)/rowH)+4);const frag=document.createDocumentFragment();for(let r=a;r<b;r++){const row=document.createElement('div');row.className='row';row.style.top=`${r*rowH}px`;row.style.height=`${rowH}px`;row.style.gridTemplateColumns=`repeat(${cols},1fr)`;for(let c=0;c<cols;c++){const d=view[r*cols+c];if(d)row.appendChild(card(d));else row.appendChild(document.createElement('div'))}frag.appendChild(row)}rows.replaceChildren(frag)}
+          function openModal(d){const box=$('#modalArt');box.querySelectorAll('img').forEach(x=>x.remove());const im=document.createElement('img');im.src=art(d);im.alt=d.species;im.addEventListener('error',()=>im.remove(),{once:true});box.appendChild(im);$('#modalName').textContent=d.species+(d.form?` · ${d.form}`:'');$('#modalInfo').textContent=`CP ${d.cp||'?'} • Collection #${d.order.toLocaleString()}`;$('#modalTags').innerHTML=tags(d).map(t=>`<span class="tag">${t[0]} ${t[1]}</span>`).join('')||'<span class="tag">Standard</span>';$('#modal').classList.add('show')}
+          function closeModal(){$('#modal').classList.remove('show')}
+          function boot(){const count=f=>ALL.reduce((n,d)=>n+(has(d,f)?1:0),0);$('#stAll').textContent=ALL.length.toLocaleString();$('#stShiny').textContent=count('shiny').toLocaleString();$('#stBg').textContent=count('background').toLocaleString();$('#stCostume').textContent=count('costume').toLocaleString();const counts=new Map;ALL.forEach(d=>counts.set(d.species,(counts.get(d.species)||0)+1));[...counts].sort((a,b)=>a[0].localeCompare(b[0])).forEach(([s,n])=>{const o=document.createElement('option');o.value=s;o.textContent=`${s} (${n})`;$('#species').appendChild(o)});$('#foot').textContent=`${ALL.length.toLocaleString()} Pokémon • Tap a card for details`;apply()}
+          $('#q').addEventListener('input',e=>{query=e.target.value;clearTimeout(window.qt);window.qt=setTimeout(apply,80)});$('#clear').addEventListener('click',()=>{$('#q').value='';query='';apply();$('#q').focus()});$('#species').addEventListener('change',e=>{species=e.target.value;apply()});$('#chips').addEventListener('click',e=>{const b=e.target.closest('.chip');if(!b)return;active=b.dataset.f;document.querySelectorAll('.chip').forEach(x=>x.classList.toggle('on',x===b));apply()});vp.addEventListener('scroll',requestRender,{passive:true});window.addEventListener('resize',()=>layout());$('#topBtn').addEventListener('click',()=>vp.scrollTo({top:0,behavior:'smooth'}));$('#modalClose').addEventListener('click',closeModal);$('#modal').addEventListener('click',e=>{if(e.target.id==='modal')closeModal()});document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal()});$('#share').addEventListener('click',async()=>{const data={title:document.title,text:"Jon's Pokémon GO trade collection",url:location.href};try{if(navigator.share)await navigator.share(data);else if(navigator.clipboard){await navigator.clipboard.writeText(location.href);const b=$('#share');const old=b.textContent;b.textContent='Copied!';setTimeout(()=>b.textContent=old,1400)}}catch(e){}});try{boot()}catch(e){console.error(e);$('#result').textContent='Collection could not be displayed.'}
+          </script></body></html>'''
 
-          def balanced(text,start,op='[',cl=']'):
-              depth=0; quote=None; esc=False
-              for i in range(start,len(text)):
-                  ch=text[i]
-                  if quote:
-                      if esc: esc=False
-                      elif ch=='\\': esc=True
-                      elif ch==quote: quote=None
-                      continue
-                  if ch in "'\"`": quote=ch; continue
-                  if ch==op: depth+=1
-                  elif ch==cl:
-                      depth-=1
-                      if depth==0: return text[start:i+1],i+1
-              raise ValueError('unclosed expression')
+          final=template.replace('__DATA_BLOCK__',data)
+          Path('index.html').write_text(final,encoding='utf-8')
+          Path('/tmp/data-check.js').write_text(data+r'''\nconst c=f=>R.filter(r=>((r[3]||0)&f)).length;const out={rows:R.length,shiny:c(1),costume:c(2),background:c(4),shadow:c(8)};console.log(JSON.stringify(out));if(out.rows!==10798||out.shiny!==774||out.costume!==1497||out.background!==293)process.exit(2);''',encoding='utf-8')
+          scripts='\n'.join(re.findall(r'<script>([\s\S]*?)</script>',final))
+          Path('/tmp/final-app.js').write_text(scripts,encoding='utf-8')
+          assert 'DecompressionStream' not in final and 'fflate' not in final and './c0.txt' not in final
+          assert "sprites/home/${has(d,'shiny')?'shiny':'normal'}" in final
+          print(json.dumps({'html_chars':len(final),'data_chars':len(data)},indent=2))
 
-          def extract_array(text,name):
-              # Find assignments even when variables are comma-chained: const S=[...],F=[...],R=[...]
-              matches=list(re.finditer(r'(?<![\w$])'+re.escape(name)+r'\s*=\s*',text))
-              if not matches: raise KeyError(name)
-              last_err=None
-              for m in matches:
-                  pos=m.end()
-                  while pos<len(text) and text[pos].isspace(): pos+=1
-                  try:
-                      if text.startswith('Object.freeze',pos):
-                          pos=text.find('(',pos)+1
-                          while text[pos].isspace(): pos+=1
-                      if text.startswith('JSON.parse',pos):
-                          p=text.find('(',pos)+1
-                          while text[p].isspace(): p+=1
-                          q=text[p]
-                          if q not in "'\"": raise ValueError('JSON.parse argument is not string')
-                          j=p+1; esc=False
-                          while j<len(text):
-                              ch=text[j]
-                              if esc: esc=False
-                              elif ch=='\\': esc=True
-                              elif ch==q: break
-                              j+=1
-                          raw=ast.literal_eval(text[p:j+1])
-                          return json.loads(raw)
-                      if text[pos]=='[':
-                          s,_=balanced(text,pos)
-                          return json.loads(s)
-                  except Exception as e: last_err=e
-              raise ValueError(f'Could not parse {name}: {last_err}')
+      - name: Verify data and JavaScript
+        run: |
+          node --check /tmp/data-check.js
+          node /tmp/data-check.js
+          node --check /tmp/final-app.js
+          grep -q "Jon's Pokémon GO Trade Collection" index.html
+          grep -q "loading=\"lazy\"" index.html
+          curl -fsL --range 0-50 https://img.pokemondb.net/sprites/home/normal/zacian.png >/dev/null
+          curl -fsL --range 0-50 https://img.pokemondb.net/sprites/home/shiny/zacian.png >/dev/null
 
-          S=extract_array(current,'S'); CF=extract_array(current,'F'); R=extract_array(current,'R')
-          NAMES=extract_array(reference,'NAMES'); ROWS=extract_array(reference,'ROWS')
-          cur=[]
-          for i,r in enumerate(R):
-              form=(CF[r[2]] if len(r)>2 and r[2] is not None and r[2] < len(CF) else '') or ''
-              name=S[r[0]] + ((' · '+form) if form else '')
-              mask=r[3] if len(r)>3 else 0
-              cur.append({'i':i+1,'name':name,'cp':r[1],'shiny':bool(mask&1),'costume':bool(mask&2),'background':bool(mask&4),'shadow':bool(mask&8)})
-          ref=[]
-          for i,r in enumerate(ROWS):
-              mask=r[2]
-              ref.append({'i':i+1,'name':NAMES[r[0]],'cp':r[1],'shiny':bool(mask&256),'costume':bool(mask&4),'background':bool(mask&1),'mask':mask})
-
-          same_order_name=sum(a['name']==b['name'] for a,b in zip(cur,ref))
-          same_order_cp=sum(a['cp']==b['cp'] for a,b in zip(cur,ref))
-          same_order_both=sum(a['name']==b['name'] and a['cp']==b['cp'] for a,b in zip(cur,ref))
-          flag_diffs=[]; row_diffs=[]
-          for a,b in zip(cur,ref):
-              if a['name']!=b['name'] or a['cp']!=b['cp']:
-                  if len(row_diffs)<60: row_diffs.append({'current':a,'reference':b})
-              if any(a[k]!=b[k] for k in ('shiny','costume','background')):
-                  if len(flag_diffs)<80: flag_diffs.append({'current':a,'reference':b})
-
-          from collections import Counter,defaultdict
-          def key(x): return (x['name'],x['cp'])
-          curkeys=Counter(key(x) for x in cur); refkeys=Counter(key(x) for x in ref)
-          common=sum((curkeys & refkeys).values())
-          report={
-              'current_parts':current_parts,'reference_parts':reference_parts,
-              'current_rows':len(cur),'reference_rows':len(ref),
-              'same_order_name':same_order_name,'same_order_cp':same_order_cp,'same_order_name_cp':same_order_both,
-              'multiset_name_cp_common':common,
-              'current_counts':{k:sum(x[k] for x in cur) for k in ('shiny','costume','background','shadow')},
-              'reference_counts':{k:sum(x[k] for x in ref) for k in ('shiny','costume','background')},
-              'row_diff_examples':row_diffs,'flag_diff_examples':flag_diffs,
-          }
-          (out/'dataset-compare.json').write_text(json.dumps(report,indent=2,ensure_ascii=False),encoding='utf-8')
-          print(json.dumps({k:v for k,v in report.items() if not k.endswith('examples')},indent=2,ensure_ascii=False))
-
-      - name: Commit inspection output
+      - name: Publish viewer
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add debug/current-decoded.html debug/reference-32476.html debug/dataset-compare.json
+          git add index.html
           git diff --cached --quiet && exit 0
-          git commit -m "Compare corrected and legacy datasets [skip ci]"
+          git commit -m "Publish polished Pokemon trade viewer [skip ci]"
           git push
