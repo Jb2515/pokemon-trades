@@ -68,6 +68,7 @@ jobs:
               for u in urls:
                   host = urlparse(u).netloc
                   hosts[host] = hosts.get(host, 0) + 1
+              data_images = list(re.finditer(r'data:image/[^;]+;base64,', html, flags=re.I))
               return {
                   'label': label,
                   'decoded_chars': len(html),
@@ -75,6 +76,7 @@ jobs:
                   'img_tags': len(re.findall(r'<img\b', html, flags=re.I)),
                   'image_hosts': hosts,
                   'image_url_examples': urls[:40],
+                  'embedded_data_images': len(data_images),
                   'has_10798': '10,798' in html or '10798' in html,
                   'has_774': '774' in html,
                   'has_293': '293' in html,
@@ -82,29 +84,22 @@ jobs:
                   'mentions_zacian': html.lower().count('zacian'),
               }
 
-          def image_snippets(label, html):
-              needles = [
-                  r'pokemondb', r'raw\.githubusercontent', r'sprites', r'\.png',
-                  r'pic\.src', r'img\.src', r'src=', r'function\s+slug', r'const\s+slug',
-                  r'function\s+image', r'const\s+image', r'fallback'
-              ]
-              spans = []
+          def snippets_for(html, label, needles):
+              spans=[]
               for pat in needles:
                   for m in re.finditer(pat, html, flags=re.I):
-                      a = max(0, m.start() - 500)
-                      b = min(len(html), m.end() + 900)
-                      spans.append((a, b, pat))
+                      a=max(0,m.start()-700); b=min(len(html),m.end()+1500)
+                      spans.append((a,b,pat))
               spans.sort()
-              merged = []
-              for a, b, pat in spans:
-                  if merged and a <= merged[-1][1] + 100:
-                      merged[-1] = (merged[-1][0], max(merged[-1][1], b), merged[-1][2] + ',' + pat)
+              merged=[]
+              for a,b,pat in spans:
+                  if merged and a <= merged[-1][1] + 150:
+                      merged[-1]=(merged[-1][0],max(merged[-1][1],b),merged[-1][2]+','+pat)
                   else:
-                      merged.append((a, b, pat))
-              lines = [f'===== {label} =====']
-              for n, (a, b, pats) in enumerate(merged[:30], 1):
-                  snippet = html[a:b].replace('\r', '')
-                  lines += [f'--- snippet {n} ({pats}) ---', snippet, '']
+                      merged.append((a,b,pat))
+              lines=[f'===== {label} =====']
+              for n,(a,b,pats) in enumerate(merged[:40],1):
+                  lines += [f'--- snippet {n} ({pats}) ---', html[a:b].replace('\r',''), '']
               return '\n'.join(lines)
 
           report = {
@@ -112,15 +107,28 @@ jobs:
               'reference': analyse('reference-32476', reference, reference_parts),
           }
           (out / 'viewer-report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
-          snippets = image_snippets('CURRENT', current) + '\n\n' + image_snippets('REFERENCE 32476', reference)
-          (out / 'image-source-snippets.txt').write_text(snippets, encoding='utf-8')
+
+          image_needles=[r'pokemondb',r'raw\.githubusercontent',r'sprites',r'\.png',r'pic\.src',r'img\.src',r'src=',r'function\s+slug',r'fallback']
+          (out / 'image-source-snippets.txt').write_text(
+              snippets_for(current,'CURRENT',image_needles)+'\n\n'+snippets_for(reference,'REFERENCE 32476',image_needles), encoding='utf-8')
+
+          capture_needles=[r'data:image',r'\.ci',r'ci:',r'ci=',r'function\s+cs',r'\bcs\(',r'background-image',r'backgroundImage',r'\.shot',r'const\s+[A-Z][A-Z0-9_]*\s*=']
+          (out / 'reference-capture-system.txt').write_text(
+              snippets_for(reference,'REFERENCE CAPTURE SYSTEM',capture_needles), encoding='utf-8')
+
+          # Extract top-level const/let declarations near the start/end to make array names visible.
+          decls=[]
+          for m in re.finditer(r'\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=', reference):
+              a=max(0,m.start()-120); b=min(len(reference),m.start()+900)
+              decls.append(reference[a:b])
+          (out / 'reference-declarations.txt').write_text('\n\n---DECL---\n\n'.join(decls[:80]), encoding='utf-8')
           print(json.dumps(report, indent=2))
 
       - name: Commit inspection output
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add debug/current-decoded.html debug/reference-32476.html debug/viewer-report.json debug/image-source-snippets.txt
+          git add debug/
           git diff --cached --quiet && exit 0
-          git commit -m "Update decoded viewer comparison [skip ci]"
+          git commit -m "Inspect legacy captured image system [skip ci]"
           git push
