@@ -6,6 +6,7 @@
     "img_tags": 1,
     "image_hosts": {},
     "image_url_examples": [],
+    "embedded_data_images": 0,
     "has_10798": true,
     "has_774": true,
     "has_293": true,
@@ -23,6 +24,7 @@
     "image_url_examples": [
       "https://img.pokemondb.net/sprites/home/${sh}/${slug(d.name)}.png"
     ],
+    "embedded_data_images": 0,
     "has_10798": true,
     "has_774": true,
     "has_293": true,
