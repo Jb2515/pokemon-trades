@@ -1,0 +1,101 @@
+name: Inspect Pokemon viewers
+
+on:
+  push:
+    paths:
+      - '.github/workflows/inspect-viewers.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decode current and reference viewers
+        shell: python
+        run: |
+          import base64, gzip, json, re, subprocess
+          from pathlib import Path
+          from urllib.parse import urlparse
+
+          REFERENCE = '9b3c0a876914e5aa6cf76939f2c3277c33be516d'
+          out = Path('debug')
+          out.mkdir(exist_ok=True)
+
+          def decode_chunks(get_chunk, max_chunks=20):
+              pieces = []
+              last_error = None
+              for i in range(max_chunks):
+                  try:
+                      part = get_chunk(i)
+                  except Exception:
+                      break
+                  if not part:
+                      break
+                  pieces.append(part.strip())
+                  try:
+                      raw = base64.b64decode(''.join(pieces))
+                      html = gzip.decompress(raw).decode('utf-8')
+                      if '<html' in html.lower() or '<!doctype' in html.lower():
+                          return html, i + 1
+                  except Exception as e:
+                      last_error = str(e)
+              raise RuntimeError(f'Could not decode payload: {last_error}')
+
+          def current_chunk(i):
+              p = Path(f'c{i}.txt')
+              if not p.exists():
+                  raise FileNotFoundError(p)
+              return p.read_text(encoding='utf-8')
+
+          def reference_chunk(i):
+              return subprocess.check_output(
+                  ['git', 'show', f'{REFERENCE}:c{i}.txt'], text=True
+              )
+
+          current, current_parts = decode_chunks(current_chunk)
+          reference, reference_parts = decode_chunks(reference_chunk)
+
+          (out / 'current-decoded.html').write_text(current, encoding='utf-8')
+          (out / 'reference-32476.html').write_text(reference, encoding='utf-8')
+
+          def analyse(label, html, parts):
+              urls = re.findall(r'(?:src|data-src)=[\"\'](https?://[^\"\']+)', html, flags=re.I)
+              hosts = {}
+              for u in urls:
+                  host = urlparse(u).netloc
+                  hosts[host] = hosts.get(host, 0) + 1
+              return {
+                  'label': label,
+                  'decoded_chars': len(html),
+                  'chunks_used': parts,
+                  'img_tags': len(re.findall(r'<img\b', html, flags=re.I)),
+                  'image_hosts': hosts,
+                  'image_url_examples': urls[:40],
+                  'has_10798': '10,798' in html or '10798' in html,
+                  'has_774': '774' in html,
+                  'has_293': '293' in html,
+                  'has_1497': '1,497' in html or '1497' in html,
+                  'mentions_zacian': html.lower().count('zacian'),
+              }
+
+          report = {
+              'current': analyse('current', current, current_parts),
+              'reference': analyse('reference-32476', reference, reference_parts),
+          }
+          (out / 'viewer-report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
+          print(json.dumps(report, indent=2))
+
+      - name: Commit inspection output
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add debug/current-decoded.html debug/reference-32476.html debug/viewer-report.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Add decoded viewer comparison [skip ci]"
+          git push
