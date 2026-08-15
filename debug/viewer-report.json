@@ -1,0 +1,32 @@
+{
+  "current": {
+    "label": "current",
+    "decoded_chars": 165855,
+    "chunks_used": 7,
+    "img_tags": 1,
+    "image_hosts": {},
+    "image_url_examples": [],
+    "has_10798": true,
+    "has_774": true,
+    "has_293": true,
+    "has_1497": true,
+    "mentions_zacian": 1
+  },
+  "reference": {
+    "label": "reference-32476",
+    "decoded_chars": 153543,
+    "chunks_used": 8,
+    "img_tags": 1,
+    "image_hosts": {
+      "img.pokemondb.net": 1
+    },
+    "image_url_examples": [
+      "https://img.pokemondb.net/sprites/home/${sh}/${slug(d.name)}.png"
+    ],
+    "has_10798": true,
+    "has_774": true,
+    "has_293": true,
+    "has_1497": true,
+    "mentions_zacian": 3
+  }
+}
