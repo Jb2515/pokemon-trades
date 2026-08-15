@@ -1,0 +1,87 @@
+name: Publish final Pokemon viewer
+
+on:
+  push:
+    paths:
+      - '.github/workflows/build-final.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build from corrected collection data
+        shell: python
+        run: |
+          import base64, gzip, re
+          from pathlib import Path
+
+          pieces=[]
+          current=None
+          for i in range(20):
+              p=Path(f'c{i}.txt')
+              if not p.exists(): break
+              pieces.append(p.read_text(encoding='utf-8').strip())
+              try:
+                  candidate=gzip.decompress(base64.b64decode(''.join(pieces))).decode('utf-8')
+                  if '<!doctype' in candidate.lower() or '<html' in candidate.lower():
+                      current=candidate
+                      break
+              except Exception:
+                  pass
+          if current is None: raise RuntimeError('Corrected collection payload could not be decoded')
+
+          start=current.index('const S=[')
+          end=current.index(';let D=[]',start)+1
+          data=current[start:end]
+          if len(data)<100000 or 'R=' not in data or 'F=' not in data:
+              raise RuntimeError('Corrected collection data block was not found')
+
+          source=Path('.github/workflows/inspect-viewers.yml').read_text(encoding='utf-8')
+          marker="template=r'''"
+          a=source.index(marker)+len(marker)
+          b=source.index("'''",a)
+          template=source[a:b]
+          final=template.replace('__DATA_BLOCK__',data)
+          Path('index.html').write_text(final,encoding='utf-8')
+
+          check=data+"\nconst c=f=>R.filter(r=>((r[3]||0)&f)).length;const out={rows:R.length,shiny:c(1),costume:c(2),background:c(4),shadow:c(8)};console.log(JSON.stringify(out));if(out.rows!==10798||out.shiny!==774||out.costume!==1497||out.background!==293)process.exit(2);\n"
+          Path('/tmp/data-check.js').write_text(check,encoding='utf-8')
+          scripts='\n'.join(re.findall(r'<script>([\s\S]*?)</script>',final))
+          Path('/tmp/final-app.js').write_text(scripts,encoding='utf-8')
+
+          assert '__DATA_BLOCK__' not in final
+          assert 'DecompressionStream' not in final
+          assert 'fflate' not in final
+          assert './c0.txt' not in final
+          assert "has(d,'shiny')?'shiny':'normal'" in final
+          assert 'loading="lazy"' in final
+          print('Built single-file viewer:',len(final),'characters')
+
+      - name: Verify collection, scripts and artwork endpoints
+        run: |
+          node --check /tmp/data-check.js
+          node /tmp/data-check.js | tee /tmp/data-report.txt
+          grep -q '"rows":10798' /tmp/data-report.txt
+          grep -q '"shiny":774' /tmp/data-report.txt
+          grep -q '"costume":1497' /tmp/data-report.txt
+          grep -q '"background":293' /tmp/data-report.txt
+          node --check /tmp/final-app.js
+          grep -q "Jon's Pokémon GO Trade Collection" index.html
+          curl -fsL --range 0-50 https://img.pokemondb.net/sprites/home/normal/zacian.png >/dev/null
+          curl -fsL --range 0-50 https://img.pokemondb.net/sprites/home/shiny/zacian.png >/dev/null
+
+      - name: Publish verified viewer
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          git diff --cached --quiet && exit 0
+          git commit -m "Publish verified polished Pokemon viewer [skip ci]"
+          git push
